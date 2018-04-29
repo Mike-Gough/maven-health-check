@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+    <flow name="maven-health-check:/health-check">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="${health.check.path}" doc:name="HTTP"/>
+        <dw:transform-message doc:name="Transform Message (generic check count)">
+            <dw:set-variable variableName="generic-checks"><![CDATA[%dw 1.0
+%output application/java
+---
+(p("health.check.generic.properties")) splitBy ',']]></dw:set-variable>
+        </dw:transform-message>
+        <choice doc:name="Choice">
+            <when expression="#[flowVars.'generic-checks' != empty]">
+                <dw:transform-message doc:name="Transform Message (generic checks)">
+                    <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+%function getProperty(id, name) (
+	p('health.check.generic.' ++ id ++ '.' ++ name)
+)
+---
+flowVars.'generic-checks' map {
+	id: $,
+	'flow-name': getProperty($, 'flow.name')
+}]]></dw:set-payload>
+                </dw:transform-message>
+                <collection-splitter doc:name="Collection Splitter"/>
+                <flow-ref name="maven-health-check:/health-check-generic-endpoint" doc:name="maven-health-check:/health-check-generic-endpoint"/>
+                <collection-aggregator failOnTimeout="true" doc:name="Collection Aggregator"/>
+                <dw:transform-message doc:name="Transform Message (response)">
+                    <dw:set-payload><![CDATA[%dw 1.0
+%output application/json
+---
+{
+	id: p("app.id"),
+	'is-healthy': (sizeOf (payload filter ($.'is-available' == false))) == 0,
+	dependencies: payload filter ($.id != null)
+}]]></dw:set-payload>
+                </dw:transform-message>
+            </when>
+            <otherwise>
+                <dw:transform-message doc:name="Transform Message (default response)">
+                    <dw:set-payload><![CDATA[%dw 1.0
+%output application/json
+---
+{
+	id: p("app.id")
+}]]></dw:set-payload>
+                </dw:transform-message>
+            </otherwise>
+        </choice>
+    </flow>
+    <flow name="maven-health-check:/health-check-generic-endpoint">
+        <enricher target="#[flowVars.'http-health-check-result']" doc:name="Message Enricher">
+            <dw:transform-message doc:name="Transform Message (call genereic flow)">
+                <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+lookup(payload.'flow-name', payload)]]></dw:set-payload>
+            </dw:transform-message>
+        </enricher>
+        <dw:transform-message doc:name="Transform Message (response)">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+{
+	id: payload.id,
+	'is-available': true
+}]]></dw:set-payload>
+        </dw:transform-message>
+        <catch-exception-strategy doc:name="Catch Exception Strategy" enableNotifications="false" >
+        	<set-variable variableName="reason" value="#[exception.message]" doc:name="Variable (reason)"/>
+            <dw:transform-message doc:name="Transform Message (error response)">
+                <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+{
+	id: payload.id,
+	'is-available': false,
+	reason: flowVars.reason
+}]]></dw:set-payload>
+            </dw:transform-message>
+        </catch-exception-strategy>
+    </flow>
+</mule>
