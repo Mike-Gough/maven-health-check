@@ -1,4 +1,4 @@
-# Ping flow
+# Health check flow
 ## How to package
 1. open the command line
 1. navigate to the project directory
